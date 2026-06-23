@@ -8,7 +8,7 @@
 - [x] ベンチ → ログ解析でボトルネック Top 3 をメモ（alp・slow log）
 - [x] `makePosts` の N+1 をバルク取得で解消（`webapp/golang/app.go`）
 - [x] openssl → ネイティブ SHA512（login/register）
-- [ ] `GET /@xxx` のクエリ改善
+- [x] `GET /@xxx` のクエリ改善
 - [ ] `SetMaxOpenConns` 等の Go チューニング
 
 ## ベンチマーク結果
@@ -18,6 +18,7 @@
 | Go 素の状態 | true | 0 | 495 | 56 | タイムアウト多発 |
 | インデックス追加後 | true | 15139 | 14253 | 0 | fail 解消 |
 | N+1 解消 + SHA512 ネイティブ化後 | true | 36027 | 32272 | 0 | pass 維持 |
+| `GET /@xxx` クエリ改善後 | true | 39342 | 35158 | 0 | pass 維持 |
 
 ```bash
 cd benchmarker
