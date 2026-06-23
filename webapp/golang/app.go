@@ -741,7 +741,8 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
+	csrfToken := getCSRFToken(r)
+	posts, err := makePosts(ctx, results, csrfToken, false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -801,7 +802,8 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
+	csrfToken := getCSRFToken(r)
+	posts, err := makePosts(ctx, results, csrfToken, false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -1025,6 +1027,8 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 	}
 
 	users := []User{}
+	csrfToken := getCSRFToken(r)
+
 	err := db.SelectContext(ctx, &users, "SELECT `id`, `account_name`, `authority`, `del_flg`, `created_at` FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC")
 	if err != nil {
 		log.Print(err)
@@ -1035,7 +1039,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		Users     []User
 		Me        User
 		CSRFToken string
-	}{users, me, getCSRFToken(r)})
+	}{users, me, csrfToken})
 }
 
 func postAdminBanned(w http.ResponseWriter, r *http.Request) {
