@@ -15,6 +15,10 @@
 - [x] 画像のファイル退避 + nginx 直接配信
 - [x] テンプレートの事前パース（起動時1回のみ ParseFiles）
 - [x] コメント最新3件の SQL 化（`ROW_NUMBER()` で DB 側で絞り込み）
+- [x] `GET /` 向け: コメント数+コメント取得の1クエリ統合、セッションユーザーの memcached キャッシュ
+- [x] `GET /posts/:id` の `SELECT *` 見直し（imgdata 除外）
+- [x] 表示用ユーザー取得で passhash を読まない（makePosts / プロフィール / 管理画面）
+- [x] getCSRFToken の二重呼び出し解消、BAN 時のユーザキャッシュ削除
 
 ## ベンチマーク結果
 
@@ -30,6 +34,8 @@
 | 画像ファイル退避後 | true | 68182 | 60932 | 0 | nginx 直接配信 |
 | imgdata 復元後（二重管理維持） | true | 65226 | 58321 | 0 | |
 | テンプレ事前パース + コメント SQL 化後 | true | 71941 | 65019 | 0 | |
+| GET / 最適化（コメント統合+ユーザキャッシュ）後 | true | 72321 | 65234 | 0 | |
+| アプリクエリ最適化一式後 | true | 72390 | 65469 | 0 | training/optimize-get-index |
 
 buffer pool 比較（同一環境・flush=2）:
 
@@ -76,7 +82,7 @@ bash scripts/export-post-images.sh
 
 ## 次にやること
 
-- [ ] `GET /image/:id.:ext` に `Cache-Control` / `ETag`
-- [ ] `/posts/:id` の `SELECT *` 見直し
-- [ ] PR 作成（image-file-storage 等）
+- [ ] `GET /@*` の COUNT 最適化
+- [ ] `GET /image/:id.:ext` に `Cache-Control`（nginx 側）
+- [ ] PR 作成（training/optimize-get-index）
 - [ ] 振り返り最終記入
