@@ -1,0 +1,18 @@
+# /etc/nginx/conf.d/isucon-gzip.conf に配置
+# nginx.conf で gzip on 済みの前提。proxy 応答を圧縮するため gzip_proxied が重要。
+# 反映: sudo cp scripts/nginx-gzip.conf.example /etc/nginx/conf.d/isucon-gzip.conf && sudo nginx -t && sudo systemctl reload nginx
+
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 6;
+gzip_min_length 256;
+gzip_types
+    text/plain
+    text/css
+    application/json
+    application/javascript
+    text/javascript
+    text/xml
+    application/xml
+    application/xml+rss
+    image/svg+xml;

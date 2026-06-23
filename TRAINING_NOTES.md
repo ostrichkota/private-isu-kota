@@ -4,6 +4,7 @@
 
 - [x] アプリ言語を Ruby → Go に切り替え（`isu-ruby` 停止、`isu-go` 起動）
 - [x] MySQL にインデックス 3 本を追加（`sql/add_indexes.sql`）
+- [x] MySQL `comments(user_id)` インデックス追加（`sql/add_index_comments_user_id.sql`）
 - [x] 計測環境セットアップ（slow log / alp / nginx LTSV / `scripts/bench-analyze.sh`）
 - [x] ベンチ → ログ解析でボトルネック Top 3 をメモ（alp・slow log）
 - [x] `makePosts` の N+1 をバルク取得で解消（`webapp/golang/app.go`）
@@ -35,6 +36,7 @@ buffer pool 比較（同一環境・flush=2）:
 ```bash
 cd benchmarker
 ./bin/benchmarker -t http://localhost -u ./userdata
+bash scripts/bench-analyze.sh
 ```
 
 MySQL チューニング反映:
@@ -49,34 +51,25 @@ sudo systemctl restart mysql
 ### セットアップ
 
 ```bash
-# MySQL slow query log（scripts/mysql-slow-log.cnf.example を参照）
-sudo mysql -e "SET GLOBAL slow_query_log = 1; SET GLOBAL long_query_time = 0.1;"
+# MySQL slow query log
+sudo cp scripts/mysql-slow-log.cnf.example /etc/mysql/conf.d/isucon-slow-log.cnf
+
+# MySQL InnoDB チューニング
+sudo cp scripts/mysql-tuning.cnf.example /etc/mysql/conf.d/isucon-tuning.cnf
+sudo systemctl restart mysql
 
 # alp インストール
 go install github.com/tkuchiki/alp/cmd/alp@latest
 
-# nginx LTSV ログ（scripts/nginx-ltsv.conf.example を参照）
+# nginx LTSV + gzip
+sudo cp scripts/nginx-gzip.conf.example /etc/nginx/conf.d/isucon-gzip.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### 解析（一括）
+## 次にやること
 
-```bash
-bash scripts/bench-analyze.sh
-```
-
-### 遅いパス Top 3（alp・合計時間）
-
-| 順位 | パス | SUM（秒） |
-|------|------|-----------|
-| 1 | GET / | 57.0 |
-| 2 | POST /login | 53.0 |
-| 3 | POST /register | 16.8 |
-
-### 重いクエリ Top 3（slow log）
-
-| 順位 | クエリ |
-|------|--------|
-| 1 | `SELECT COUNT(*) FROM comments WHERE user_id = ?` |
-| 2 | `INSERT INTO posts (...)` |
-| 3 | `DELETE FROM posts WHERE id > ?`（initialize） |
+- [ ] `GET /` / `GET /posts` のクエリ改善
+- [ ] 画像のファイル退避（`INSERT posts` の imgdata 対策）
+- [ ] `GET /image/:id.:ext` に `Cache-Control` / `ETag`
+- [ ] `/posts/:id` の N+1
+- [ ] 振り返り最終記入
