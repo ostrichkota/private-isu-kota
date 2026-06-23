@@ -557,40 +557,20 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commentCount := 0
-	err = db.GetContext(ctx, &commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
+	var counts struct {
+		PostCount      int `db:"post_count"`
+		CommentCount   int `db:"comment_count"`
+		CommentedCount int `db:"commented_count"`
+	}
+	err = db.GetContext(ctx, &counts, `
+		SELECT
+			(SELECT COUNT(*) FROM posts WHERE user_id = ?) AS post_count,
+			(SELECT COUNT(*) FROM comments WHERE user_id = ?) AS comment_count,
+			(SELECT COUNT(*) FROM comments c INNER JOIN posts p ON c.post_id = p.id WHERE p.user_id = ?) AS commented_count
+	`, user.ID, user.ID, user.ID)
 	if err != nil {
 		log.Print(err)
 		return
-	}
-
-	postIDs := []int{}
-	err = db.SelectContext(ctx, &postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", user.ID)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-	postCount := len(postIDs)
-
-	commentedCount := 0
-	if postCount > 0 {
-		s := []string{}
-		for range postIDs {
-			s = append(s, "?")
-		}
-		placeholder := strings.Join(s, ", ")
-
-		// convert []int -> []any
-		args := make([]any, len(postIDs))
-		for i, v := range postIDs {
-			args[i] = v
-		}
-
-		err = db.GetContext(ctx, &commentedCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN ("+placeholder+")", args...)
-		if err != nil {
-			log.Print(err)
-			return
-		}
 	}
 
 	me := getSessionUser(r)
@@ -611,7 +591,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		CommentCount   int
 		CommentedCount int
 		Me             User
-	}{posts, user, postCount, commentCount, commentedCount, me})
+	}{posts, user, counts.PostCount, counts.CommentCount, counts.CommentedCount, me})
 }
 
 func getPosts(w http.ResponseWriter, r *http.Request) {
