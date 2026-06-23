@@ -29,12 +29,21 @@ import (
 var (
 	db    *sqlx.DB
 	store *gsm.MemcacheStore
+
+	tmplLogin    *template.Template
+	tmplRegister *template.Template
+	tmplIndex    *template.Template
+	tmplUser     *template.Template
+	tmplPosts    *template.Template
+	tmplPostID   *template.Template
+	tmplBanned   *template.Template
 )
 
 const (
 	postsPerPage  = 20
 	ISO8601Format = "2006-01-02T15:04:05-07:00"
 	UploadLimit   = 10 * 1024 * 1024 // 10mb
+	imageDir      = "/home/isucon/private_isu/webapp/images"
 )
 
 type User struct {
@@ -91,6 +100,64 @@ func dbInitialize(ctx context.Context) {
 
 	for _, sql := range sqls {
 		db.ExecContext(ctx, sql)
+	}
+	deletePostImagesAbove(10000)
+}
+
+func extFromMime(mime string) string {
+	switch mime {
+	case "image/jpeg":
+		return "jpg"
+	case "image/png":
+		return "png"
+	case "image/gif":
+		return "gif"
+	default:
+		return ""
+	}
+}
+
+func mimeFromExt(ext string) string {
+	switch ext {
+	case "jpg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "gif":
+		return "image/gif"
+	default:
+		return ""
+	}
+}
+
+func imageFilePath(id int, ext string) string {
+	return path.Join(imageDir, strconv.Itoa(id)+"."+ext)
+}
+
+func savePostImage(id int, mime string, data []byte) error {
+	ext := extFromMime(mime)
+	if ext == "" {
+		return fmt.Errorf("unknown mime: %s", mime)
+	}
+	return os.WriteFile(imageFilePath(id, ext), data, 0644)
+}
+
+func deletePostImagesAbove(id int) {
+	entries, err := os.ReadDir(imageDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		dot := strings.LastIndex(name, ".")
+		if dot <= 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(name[:dot])
+		if err != nil || pid <= id {
+			continue
+		}
+		os.Remove(path.Join(imageDir, name))
 	}
 }
 
@@ -305,11 +372,70 @@ func fetchCommentCountsByPostIDs(ctx context.Context, postIDs []int) (map[int]in
 	return m, nil
 }
 
+func getTemplPath(filename string) string {
+	return path.Join("templates", filename)
+}
+
+func mustParseTemplates() {
+	tmplLogin = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("login.html"),
+	))
+	tmplRegister = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("register.html"),
+	))
+	tmplBanned = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("banned.html"),
+	))
+
+	fmap := template.FuncMap{"imageURL": imageURL}
+	tmplIndex = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("index.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	tmplUser = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("user.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	tmplPosts = template.Must(template.New("posts.html").Funcs(fmap).ParseFiles(
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	tmplPostID = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("post_id.html"),
+		getTemplPath("post.html"),
+	))
+}
+
 func fetchCommentsByPostIDs(ctx context.Context, postIDs []int, allComments bool) (map[int][]Comment, error) {
 	if len(postIDs) == 0 {
 		return map[int][]Comment{}, nil
 	}
-	query, args, err := sqlx.In("SELECT * FROM `comments` WHERE `post_id` IN (?) ORDER BY `post_id`, `created_at` DESC", postIDs)
+
+	var query string
+	if allComments {
+		query = "SELECT `id`, `post_id`, `user_id`, `comment`, `created_at` FROM `comments` WHERE `post_id` IN (?) ORDER BY `post_id`, `created_at` DESC"
+	} else {
+		query = `
+			SELECT id, post_id, user_id, comment, created_at
+			FROM (
+				SELECT id, post_id, user_id, comment, created_at,
+					ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY created_at DESC) AS rn
+				FROM comments
+				WHERE post_id IN (?)
+			) AS t
+			WHERE t.rn <= 3
+			ORDER BY post_id, created_at DESC`
+	}
+
+	query, args, err := sqlx.In(query, postIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -322,9 +448,6 @@ func fetchCommentsByPostIDs(ctx context.Context, postIDs []int, allComments bool
 
 	m := make(map[int][]Comment)
 	for _, c := range all {
-		if !allComments && len(m[c.PostID]) >= 3 {
-			continue
-		}
 		m[c.PostID] = append(m[c.PostID], c)
 	}
 	return m, nil
@@ -364,10 +487,6 @@ func secureRandomStr(b int) string {
 	return fmt.Sprintf("%x", k)
 }
 
-func getTemplPath(filename string) string {
-	return path.Join("templates", filename)
-}
-
 func getInitialize(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dbInitialize(ctx)
@@ -382,10 +501,7 @@ func getLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("login.html")),
-	).Execute(w, struct {
+	tmplLogin.Execute(w, struct {
 		Me    User
 		Flash string
 	}{me, getFlash(w, r, "notice")})
@@ -422,10 +538,7 @@ func getRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("register.html")),
-	).Execute(w, struct {
+	tmplRegister.Execute(w, struct {
 		Me    User
 		Flash string
 	}{User{}, getFlash(w, r, "notice")})
@@ -510,16 +623,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("index.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	tmplIndex.Execute(w, struct {
 		Posts     []Post
 		Me        User
 		CSRFToken string
@@ -575,16 +679,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 	me := getSessionUser(r)
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("user.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	tmplUser.Execute(w, struct {
 		Posts          []Post
 		User           User
 		PostCount      int
@@ -631,14 +726,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("posts.html").Funcs(fmap).ParseFiles(
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, posts)
+	tmplPosts.Execute(w, posts)
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
@@ -672,15 +760,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 
 	me := getSessionUser(r)
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("post_id.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	tmplPostID.Execute(w, struct {
 		Post Post
 		Me   User
 	}{p, me})
@@ -750,7 +830,7 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		query,
 		me.ID,
 		mime,
-		filedata,
+		[]byte{},
 		r.FormValue("body"),
 	)
 	if err != nil {
@@ -760,6 +840,11 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 
 	pid, err := result.LastInsertId()
 	if err != nil {
+		log.Print(err)
+		return
+	}
+
+	if err := savePostImage(int(pid), mime, filedata); err != nil {
 		log.Print(err)
 		return
 	}
@@ -776,23 +861,34 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ext := r.PathValue("ext")
+	mime := mimeFromExt(ext)
+	if mime == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if data, err := os.ReadFile(imageFilePath(pid, ext)); err == nil {
+		w.Header().Set("Content-Type", mime)
+		if _, err := w.Write(data); err != nil {
+			log.Print(err)
+		}
+		return
+	}
+
 	post := Post{}
-	err = db.GetContext(ctx, &post, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	err = db.GetContext(ctx, &post, "SELECT `mime`, `imgdata` FROM `posts` WHERE `id` = ?", pid)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	ext := r.PathValue("ext")
-
 	if ext == "jpg" && post.Mime == "image/jpeg" ||
 		ext == "png" && post.Mime == "image/png" ||
 		ext == "gif" && post.Mime == "image/gif" {
 		w.Header().Set("Content-Type", post.Mime)
-		_, err := w.Write(post.Imgdata)
-		if err != nil {
+		if _, err := w.Write(post.Imgdata); err != nil {
 			log.Print(err)
-			return
 		}
 		return
 	}
@@ -849,10 +945,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("banned.html")),
-	).Execute(w, struct {
+	tmplBanned.Execute(w, struct {
 		Users     []User
 		Me        User
 		CSRFToken string
@@ -936,6 +1029,12 @@ func main() {
 	db.SetMaxOpenConns(80)
 	db.SetMaxIdleConns(80)
 	defer db.Close()
+
+	if err := os.MkdirAll(imageDir, 0755); err != nil {
+		log.Fatalf("Failed to create image dir: %s.", err.Error())
+	}
+
+	mustParseTemplates()
 
 	r := chi.NewRouter()
 

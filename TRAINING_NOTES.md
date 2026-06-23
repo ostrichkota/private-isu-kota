@@ -12,6 +12,9 @@
 - [x] `GET /@xxx` のクエリ改善
 - [x] `SetMaxOpenConns` 等の Go チューニング（MaxOpen/Idle=80, interpolateParams）
 - [x] MySQL InnoDB チューニング（buffer pool 768M / flush_log_at_trx_commit=2 / binlog 1日）
+- [x] 画像のファイル退避 + nginx 直接配信
+- [x] テンプレートの事前パース（起動時1回のみ ParseFiles）
+- [x] コメント最新3件の SQL 化（`ROW_NUMBER()` で DB 側で絞り込み）
 
 ## ベンチマーク結果
 
@@ -24,6 +27,9 @@
 | MySQL InnoDB チューニング後 | true | 41214 | 36804 | 0 | buffer pool 1G, flush=2 |
 | buffer pool 768M に調整後 | true | 46121 | 41010 | 0 | メモリ 3.7GB 向け |
 | DB チューニング一式後 | true | 47284 | 42152 | 0 | pool+InnoDB+binlog |
+| 画像ファイル退避後 | true | 68182 | 60932 | 0 | nginx 直接配信 |
+| imgdata 復元後（二重管理維持） | true | 65226 | 58321 | 0 | |
+| テンプレ事前パース + コメント SQL 化後 | true | 71941 | 65019 | 0 | |
 
 buffer pool 比較（同一環境・flush=2）:
 
@@ -61,15 +67,16 @@ sudo systemctl restart mysql
 # alp インストール
 go install github.com/tkuchiki/alp/cmd/alp@latest
 
-# nginx LTSV + gzip
-sudo cp scripts/nginx-gzip.conf.example /etc/nginx/conf.d/isucon-gzip.conf
+# nginx 画像直接配信（scripts/nginx-image-location.conf.example を isucon.conf に追加）
 sudo nginx -t && sudo systemctl reload nginx
+
+# 既存画像のエクスポート（初回のみ・OOM 回避のためビルド済みバイナリ使用）
+bash scripts/export-post-images.sh
 ```
 
 ## 次にやること
 
-- [ ] `GET /` / `GET /posts` のクエリ改善
-- [ ] 画像のファイル退避（`INSERT posts` の imgdata 対策）
 - [ ] `GET /image/:id.:ext` に `Cache-Control` / `ETag`
-- [ ] `/posts/:id` の N+1
+- [ ] `/posts/:id` の `SELECT *` 見直し
+- [ ] PR 作成（image-file-storage 等）
 - [ ] 振り返り最終記入
