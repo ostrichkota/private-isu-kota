@@ -365,7 +365,7 @@ func fetchUsersByIDs(ctx context.Context, ids []int) (map[int]User, error) {
 	if len(ids) == 0 {
 		return map[int]User{}, nil
 	}
-	query, args, err := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", ids)
+	query, args, err := sqlx.In("SELECT `id`, `account_name`, `authority`, `del_flg`, `created_at` FROM `users` WHERE `id` IN (?)", ids)
 	if err != nil {
 		return nil, err
 	}
