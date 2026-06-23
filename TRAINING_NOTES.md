@@ -9,8 +9,8 @@
 - [x] `makePosts` の N+1 をバルク取得で解消（`webapp/golang/app.go`）
 - [x] openssl → ネイティブ SHA512（login/register）
 - [x] `GET /@xxx` のクエリ改善
-- [ ] `SetMaxOpenConns` 等の Go チューニング
-- [x] MySQL InnoDB チューニング（buffer pool 768M / flush_log_at_trx_commit=2）
+- [x] `SetMaxOpenConns` 等の Go チューニング（MaxOpen/Idle=80, interpolateParams）
+- [x] MySQL InnoDB チューニング（buffer pool 768M / flush_log_at_trx_commit=2 / binlog 1日）
 
 ## ベンチマーク結果
 
@@ -22,6 +22,7 @@
 | `GET /@xxx` クエリ改善後 | true | 39342 | 35158 | 0 | pass 維持 |
 | MySQL InnoDB チューニング後 | true | 41214 | 36804 | 0 | buffer pool 1G, flush=2 |
 | buffer pool 768M に調整後 | true | 46121 | 41010 | 0 | メモリ 3.7GB 向け |
+| DB チューニング一式後 | true | 47284 | 42152 | 0 | pool+InnoDB+binlog |
 
 buffer pool 比較（同一環境・flush=2）:
 

@@ -922,7 +922,8 @@ func main() {
 	cfg.Addr = fmt.Sprintf("%s:%s", host, port)
 	cfg.DBName = dbname
 	cfg.Params = map[string]string{
-		"charset": "utf8mb4",
+		"charset":           "utf8mb4",
+		"interpolateParams": "true",
 	}
 	cfg.ParseTime = true
 	cfg.Loc = time.Local
@@ -932,6 +933,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
+	db.SetMaxOpenConns(80)
+	db.SetMaxIdleConns(80)
 	defer db.Close()
 
 	r := chi.NewRouter()
