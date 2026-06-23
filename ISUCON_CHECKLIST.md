@@ -3,9 +3,9 @@
 ## 前提
 
 - **時間**: 6 時間（1 日）
-- **完了済み**: SSH 接続、ベンチマーカー実行、初回ベンチマーク、Go 切り替え、インデックス追加、計測環境、N+1 解消（コード）
+- **完了済み**: SSH、ベンチ、Go 切替、インデックス、計測環境、N+1、SHA512、`GET /@xxx`、DB 接続プール、MySQL InnoDB チューニング、nginx gzip
 - **ゴール**: 計測→改善→再計測のサイクルを 1 回以上回し、スコアを上げる。N+1 解消を体験する。
-- **言語**: サーバ上で既に動いている実装をそのまま使う（**言語切り替えはしない** — 時間がもったいない）。未デプロイなら Go（`webapp/golang/`）を推奨。
+- **言語**: Go（`isu-go` / `webapp/golang/`）
 
 ## 基準スコア（記入欄）
 
@@ -13,8 +13,8 @@
 初回スコア: 0（Go 素の状態）
 初回 pass: true
 計測日時: ___
-中間スコア: 15139（インデックス追加後）
-N+1 解消後: 未計測
+最終スコア: 46899（nginx gzip 有効化後）
+改善率: 約 +∞%（0 起点）
 ```
 
 ## 6 時間で捨てるもの（後回し OK）
@@ -22,7 +22,7 @@ N+1 解消後: 未計測
 - ローカル Docker 環境の構築（サーバ上で直接開発）
 - 画像のファイル退避・nginx 直接配信（効果大だが実装時間がかかる）
 - HTML / memcached キャッシュ（DOM 検証で fail リスクあり）
-- パスワードハッシュの openssl 置換（効果は中程度、N+1 後に余裕があれば）
+- ~~パスワードハッシュの openssl 置換~~ → **実施済み**
 - 本番 ISUCON 当日の運用（研修後に別途）
 
 ---
@@ -54,55 +54,24 @@ gantt
 
 ## 0:00 – 0:30｜環境把握（30 分）
 
-初回ベンチは取得済みのため、環境把握とデプロイフローの確立に集中する。
-
 ### やること（Must）
 
 - [ ] サーバ構成を 5 分でメモ（app / db / memcached の IP と役割）
 - [x] アプリの起動・再起動コマンドを 1 人が実行できるようにする（`isu-go` 起動済み）
 - [x] コード反映方法を決める（`git pull` + 再起動 が最速）
-- [x] nginx / MySQL / memcached の設定ファイル場所を確認（計測用 example あり）
-- [x] 初回ベンチ + スコア記録（完了 — 上記「基準スコア」欄に記入）
-
-### チーム分担（3〜4 人想定）
-
-| 役割 | 担当 |
-|------|------|
-| 計測・ベンチ実行 | 1 人 |
-| アプリ修正 | 1〜2 人 |
-| DB / インフラ | 1 人 |
-
-### スキップ可
-
-- ローカル compose 起動
-- `~/.ssh/config` の整備（時間があれば）
+- [x] nginx / MySQL / memcached の設定ファイル場所を確認（`scripts/*.example` あり）
+- [x] 初回ベンチ + スコア記録
 
 ---
 
 ## 0:30 – 1:00｜計測ツールセットアップ（30 分）
 
-ベンチ 1 回 → ログ解析、のループを回せる状態にする。
-
 ### Must
 
 - [x] MySQL slow query log を有効化
-
-```sql
-SET GLOBAL slow_query_log = 1;
-SET GLOBAL long_query_time = 0.1;
--- 永続化は my.cnf（時間があれば）
-```
-
 - [x] `alp` で nginx access log を解析
-
-```bash
-# インストール例（macOS）
-brew install alp
-# ベンチ後
-sudo alp json --file /var/log/nginx/access.log
-```
-
 - [x] ベンチ → alp → slow log の順で「遅いパス」「重いクエリ」を Top 3 ずつメモ
+- [x] `scripts/bench-analyze.sh` で一括解析
 
 ### 余裕があれば
 
@@ -113,123 +82,80 @@ sudo alp json --file /var/log/nginx/access.log
 
 ## 1:00 – 3:00｜N+1 解消（2 時間）★ メインイベント
 
-6 時間の半分をここに使う。効果が最も大きい。
-
-### 理解（15 分、コードを読むだけ）
-
-`webapp/golang/app.go` または使用中言語の `makePosts` / `make_posts` 相当を開く。
-
-1 ページ（20 投稿）あたり **80+ クエリ** が発生している典型パターン:
-
-1. コメント数 `COUNT`
-2. 最新コメント 3 件 `SELECT`
-3. コメント投稿者 `SELECT`（×3）
-4. 投稿者 `SELECT`（×20）
-
-ベンチが重点的に叩くパス:
-
-| パス | 優先度 |
-|------|--------|
-| `GET /` | 最高 |
-| `GET /posts?max_created_at=...` | 最高 |
-| `GET /@:account_name` | 高 |
-| `GET /posts/:id` | 高 |
-
-### 実装（1 時間 45 分）
+### 実装
 
 - [x] `makePosts` を JOIN / バルク取得に書き換え
-  - [x] 投稿 20 件を 1 クエリで取得
-  - [x] コメント数を `GROUP BY post_id` で一括取得
-  - [x] 最新コメント 3 件をサブクエリ or ウィンドウ関数で一括取得
-  - [x] ユーザー情報を `WHERE id IN (...)` で一括取得
-- [ ] デプロイ → 再起動 → **ベンチ実行**（N+1 解消後）
-- [ ] スコアを記録（改善幅を確認）
-- [x] `pass: true` を維持（DOM 構造を変えない）
-
-### 失敗時
-
-- [ ] `./bin/benchmarker -debug` で失敗メッセージ確認
-- [ ] 変更を revert して pass に戻してから次の施策へ
+- [x] デプロイ → 再起動 → ベンチ実行（36027）
+- [x] スコアを記録
+- [x] `pass: true` を維持
 
 ---
 
 ## 3:00 – 4:00｜インデックス + クイックウィン（1 時間）
 
-N+1 後もまだ遅い場合、ここで追加改善。
-
-### インデックス（30 分）
+### インデックス
 
 - [x] `EXPLAIN` で主要クエリを確認してから追加
-
-```sql
--- よく効くインデックス
-CREATE INDEX idx_posts_created_at ON posts(created_at);
-CREATE INDEX idx_posts_user_created ON posts(user_id, created_at);
-CREATE INDEX idx_comments_post_created ON comments(post_id, created_at);
-```
-
+- [x] インデックス追加（`sql/add_indexes.sql` + `sql/add_index_comments_user_id.sql`）
 - [x] 追加後にベンチ → スコア記録（0 → 15139）
 
-### クイックウィン（30 分、余裕に応じて 1〜2 個）
+### クイックウィン
 
-| 施策 | 所要時間 | 効果 |
-|------|----------|------|
-| nginx gzip 有効化 | 5 分 | 中 |
-| MySQL `innodb_buffer_pool_size` 増加 | 10 分 | 中 |
-| Go: `SetMaxOpenConns(80)` 等 | 5 分 | 小〜中 |
-| Ruby: Unicorn worker 数増加 | 5 分 | 小〜中 |
+| 施策 | 状態 | 備考 |
+|------|------|------|
+| nginx gzip 有効化 | [x] | `scripts/nginx-gzip.conf.example` |
+| MySQL `innodb_buffer_pool_size` | [x] | 768M（`scripts/mysql-tuning.cnf.example`） |
+| MySQL `innodb_flush_log_at_trx_commit=2` | [x] | 同上 |
+| Go `SetMaxOpenConns(80)` 等 | [x] | `webapp/golang/app.go` |
+| openssl → ネイティブ SHA512 | [x] | login/register |
 
-- [ ] 1 施策ごとにベンチ → 効果がなければ revert
+- [x] 1 施策ごとにベンチ → 効果確認
 
 ---
 
 ## 4:00 – 5:30｜改善サイクル（90 分）
 
-「ベンチ → alp → 修正 → ベンチ」を **2〜3 回** 回す。
+- [x] 改善サイクル 2〜3 回（`bench-analyze.sh` で反復計測済み）
 
-### ループ
+### 実施済み（時間が余ったら枠）
 
-```
-1. ベンチ実行 → スコア記録
-2. alp / slow log でボトルネック確認
-3. 小さく 1 点修正
-4. デプロイ → 再起動
-5. ベンチ → スコア比較
-```
-
-### 時間が余ったら（優先度順）
-
-1. `/posts/:id` の N+1（詳細ページのコメント一覧）
-2. `GET /image/:id.:ext` に `Cache-Control` / `ETag` 追加
-3. openssl subprocess → ネイティブハッシュ（Go/Ruby）
-
-### 時間が足りない場合
-
-- 4:00 時点のスコアで打ち切り OK
-- N+1 + インデックスだけでも研修目的は達成
+1. ~~openssl subprocess → ネイティブハッシュ~~ → **実施済み**
+2. ~~`GET /@xxx` のクエリ改善~~ → **実施済み**
+3. `/posts/:id` の N+1 → **未実施**
+4. `GET /image/:id.:ext` に `Cache-Control` / `ETag` → **未実施**
 
 ---
 
 ## 5:30 – 6:00｜振り返り（30 分）
 
-- [ ] 初回 vs 最終スコアを記録
-- [ ] 効いた施策・効かなかった施策をメモ
+- [x] 初回 vs 最終スコアを記録
+- [ ] 効いた施策・効かなかった施策をメモ（下書きあり）
 - [ ] 次回（本番 ISUCON 前）にやることを 3 つだけ書く
 
 ### 振り返りテンプレート
 
 ```
-初回スコア: ___
-最終スコア: ___
-改善率: ___%
+初回スコア: 0
+最終スコア: 46899
+改善率: 約 +∞%（0 起点）
 
 効いた施策:
--
+- N+1 解消（makePosts バルク取得）
+- インデックス追加
+- openssl → ネイティブ SHA512
+- GET /@xxx クエリ改善
+- Go DB 接続プール（SetMaxOpenConns=80）
+- MySQL InnoDB チューニング（buffer pool 768M）
+- nginx gzip（CSS/JS 圧縮）
+
+効かなかった / 見送り:
+- SetConnMaxLifetime（再接続コストでスコア低下）
+- buffer pool 1G（メモリ 3.7GB 環境では 768M を採用）
 
 次にやること:
-1. 画像のファイル退避
-2. alp + pt-query-digest の習熟
-3. （その他）
+1. GET / / GET /posts のクエリ改善
+2. 画像のファイル退避
+3. GET /image に Cache-Control / ETag
 ```
 
 ---
@@ -242,6 +168,11 @@ CREATE INDEX idx_comments_post_created ON comments(post_id, created_at);
 - [x] ベンチマーカー実行
 - [x] 初回ベンチ + 基準スコア記録
 - [x] Ruby → Go 切り替え
+- [x] openssl → ネイティブ SHA512
+- [x] `GET /@xxx` クエリ改善
+- [x] MySQL InnoDB チューニング
+- [x] Go DB 接続プール
+- [x] nginx gzip
 
 ### 0:00–0:30 準備
 
@@ -254,23 +185,31 @@ CREATE INDEX idx_comments_post_created ON comments(post_id, created_at);
 - [x] alp 導入
 - [x] ボトルネック Top 3 メモ
 
-### 1:00–3:00 N+1（最重要）
+### 1:00–3:00 N+1
 
 - [x] `makePosts` の N+1 解消
-- [ ] ベンチ pass 確認 + スコア記録（N+1 解消後）
+- [x] ベンチ pass 確認 + スコア記録
 
 ### 3:00–4:00 インデックス + インフラ
 
-- [x] インデックス 3 本追加
-- [ ] nginx gzip 等クイックウィン 1〜2 個
+- [x] インデックス追加
+- [x] クイックウィン（gzip / InnoDB / 接続プール）
 
 ### 4:00–5:30 反復
 
-- [ ] 改善サイクル 2〜3 回
+- [x] 改善サイクル 2〜3 回
 
 ### 5:30–6:00 振り返り
 
-- [ ] スコア比較・施策メモ・次回 TODO
+- [ ] 振り返り最終記入
+
+### 残タスク
+
+- [ ] サーバ構成メモ
+- [ ] `GET /` / `GET /posts` のクエリ改善
+- [ ] 画像のファイル退避
+- [ ] `GET /image/:id.:ext` に Cache-Control / ETag
+- [ ] `/posts/:id` の N+1
 
 ---
 
@@ -280,14 +219,32 @@ CREATE INDEX idx_comments_post_created ON comments(post_id, created_at);
 
 ```bash
 cd benchmarker
-./bin/benchmarker -t http://<app-server> -u ./userdata
-./bin/benchmarker -t http://<app-server> -u ./userdata -debug  # 失敗時
+./bin/benchmarker -t http://localhost -u ./userdata
+./bin/benchmarker -t http://localhost -u ./userdata -debug  # 失敗時
+bash scripts/bench-analyze.sh  # ベンチ + alp + slow log 一括
 ```
 
-### スコア JSON
+### 設定ファイル一覧
 
-- `pass: false` → 事前検証失敗 or リクエスト失敗あり。`-debug` で原因確認
-- GET +1 / POST +2 / 画像投稿 +5 / 失敗 -10〜-20
+| ファイル | 配置先 |
+|---------|--------|
+| `scripts/mysql-slow-log.cnf.example` | `/etc/mysql/conf.d/isucon-slow-log.cnf` |
+| `scripts/mysql-tuning.cnf.example` | `/etc/mysql/conf.d/isucon-tuning.cnf` |
+| `scripts/nginx-ltsv.conf.example` | `/etc/nginx/sites-available/isucon.conf` |
+| `scripts/nginx-gzip.conf.example` | `/etc/nginx/conf.d/isucon-gzip.conf` |
+| `sql/add_indexes.sql` | MySQL に適用 |
+| `sql/add_index_comments_user_id.sql` | MySQL に適用 |
+
+### スコア推移
+
+| タイミング | score |
+|-----------|-------|
+| Go 素の状態 | 0 |
+| インデックス追加後 | 15139 |
+| N+1 + SHA512 後 | 36027 |
+| `GET /@xxx` 改善後 | 39342 |
+| DB 接続プール後 | 45524 |
+| nginx gzip 後 | **46899** |
 
 ### サービス構成
 
