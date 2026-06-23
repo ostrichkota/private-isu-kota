@@ -362,6 +362,80 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 	return posts, nil
 }
 
+func loadPostDetail(ctx context.Context, postID int, csrfToken string) (Post, error) {
+	type postUserRow struct {
+		ID            int       `db:"id"`
+		UserID        int       `db:"user_id"`
+		Body          string    `db:"body"`
+		Mime          string    `db:"mime"`
+		CreatedAt     time.Time `db:"created_at"`
+		AccountName   string    `db:"account_name"`
+		Authority     int       `db:"authority"`
+		DelFlg        int       `db:"del_flg"`
+		UserCreatedAt time.Time `db:"user_created_at"`
+	}
+
+	var row postUserRow
+	err := db.GetContext(ctx, &row, `
+		SELECT p.id, p.user_id, p.body, p.mime, p.created_at,
+			u.account_name, u.authority, u.del_flg, u.created_at AS user_created_at
+		FROM posts p
+		INNER JOIN users u ON u.id = p.user_id AND u.del_flg = 0
+		WHERE p.id = ?`, postID)
+	if err != nil {
+		return Post{}, err
+	}
+
+	post := Post{
+		ID:        row.ID,
+		UserID:    row.UserID,
+		Body:      row.Body,
+		Mime:      row.Mime,
+		CreatedAt: row.CreatedAt,
+		CSRFToken: csrfToken,
+		User: User{
+			ID:          row.UserID,
+			AccountName: row.AccountName,
+			Authority:   row.Authority,
+			DelFlg:      row.DelFlg,
+			CreatedAt:   row.UserCreatedAt,
+		},
+	}
+
+	var comments []Comment
+	if err := db.SelectContext(ctx, &comments,
+		"SELECT `id`, `post_id`, `user_id`, `comment`, `created_at` FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` ASC",
+		postID); err != nil {
+		return Post{}, err
+	}
+	post.CommentCount = len(comments)
+	if len(comments) == 0 {
+		post.Comments = []Comment{}
+		return post, nil
+	}
+
+	userIDSet := make(map[int]struct{}, len(comments))
+	for _, c := range comments {
+		userIDSet[c.UserID] = struct{}{}
+	}
+	userIDs := make([]int, 0, len(userIDSet))
+	for id := range userIDSet {
+		userIDs = append(userIDs, id)
+	}
+
+	users, err := fetchUsersByIDs(ctx, userIDs)
+	if err != nil {
+		return Post{}, err
+	}
+	for i := range comments {
+		if u, ok := users[comments[i].UserID]; ok {
+			comments[i].User = u
+		}
+	}
+	post.Comments = comments
+	return post, nil
+}
+
 func fetchUsersByIDs(ctx context.Context, ids []int) (map[int]User, error) {
 	if len(ids) == 0 {
 		return map[int]User{}, nil
@@ -852,32 +926,34 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `id` = ?", pid)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	csrfToken := getCSRFToken(r)
+	var (
+		me      User
+		post    Post
+		postErr error
+		wg      sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		me = getSessionUser(r)
+	}()
+	go func() {
+		defer wg.Done()
+		post, postErr = loadPostDetail(ctx, pid, csrfToken)
+	}()
+	wg.Wait()
 
-	posts, err := makePosts(ctx, results, getCSRFToken(r), true)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-
-	if len(posts) == 0 {
+	if postErr != nil {
+		log.Print(postErr)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	p := posts[0]
-
-	me := getSessionUser(r)
-
 	tmplPostID.Execute(w, struct {
 		Post Post
 		Me   User
-	}{p, me})
+	}{post, me})
 }
 
 func postIndex(w http.ResponseWriter, r *http.Request) {
