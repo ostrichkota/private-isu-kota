@@ -17,8 +17,45 @@ cd benchmarker
 ./bin/benchmarker -t http://localhost -u ./userdata
 ```
 
+## 計測環境
+
+### セットアップ
+
+```bash
+# MySQL slow query log（scripts/mysql-slow-log.cnf.example を参照）
+sudo mysql -e "SET GLOBAL slow_query_log = 1; SET GLOBAL long_query_time = 0.1;"
+
+# alp インストール
+go install github.com/tkuchiki/alp/cmd/alp@latest
+
+# nginx LTSV ログ（scripts/nginx-ltsv.conf.example を参照）
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 解析（一括）
+
+```bash
+bash scripts/bench-analyze.sh
+```
+
+### 遅いパス Top 3（alp・合計時間）
+
+| 順位 | パス | SUM（秒） |
+|------|------|-----------|
+| 1 | GET / | 57.0 |
+| 2 | POST /login | 53.0 |
+| 3 | POST /register | 16.8 |
+
+### 重いクエリ Top 3（slow log）
+
+| 順位 | クエリ |
+|------|--------|
+| 1 | `SELECT COUNT(*) FROM comments WHERE user_id = ?` |
+| 2 | `INSERT INTO posts (...)` |
+| 3 | `DELETE FROM posts WHERE id > ?`（initialize） |
+
 ## 次にやること
 
-- [ ] `makePosts` の N+1 解消（`webapp/golang/app.go`）
-- [ ] slow query log / alp でボトルネック確認
+- [ ] openssl → ネイティブ SHA512（login/register）
+- [ ] `GET /@xxx` のクエリ改善
 - [ ] `SetMaxOpenConns` 等の Go チューニング
