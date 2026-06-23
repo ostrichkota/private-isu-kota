@@ -13,6 +13,8 @@
 - [x] `SetMaxOpenConns` 等の Go チューニング（MaxOpen/Idle=80, interpolateParams）
 - [x] MySQL InnoDB チューニング（buffer pool 768M / flush_log_at_trx_commit=2 / binlog 1日）
 - [x] 画像のファイル退避 + nginx 直接配信
+- [x] テンプレートの事前パース（起動時1回のみ ParseFiles）
+- [x] コメント最新3件の SQL 化（`ROW_NUMBER()` で DB 側で絞り込み）
 
 ## ベンチマーク結果
 
@@ -26,6 +28,8 @@
 | buffer pool 768M に調整後 | true | 46121 | 41010 | 0 | メモリ 3.7GB 向け |
 | DB チューニング一式後 | true | 47284 | 42152 | 0 | pool+InnoDB+binlog |
 | 画像ファイル退避後 | true | 68182 | 60932 | 0 | nginx 直接配信 |
+| imgdata 復元後（二重管理維持） | true | 65226 | 58321 | 0 | |
+| テンプレ事前パース + コメント SQL 化後 | true | 71941 | 65019 | 0 | |
 
 buffer pool 比較（同一環境・flush=2）:
 
@@ -72,8 +76,7 @@ bash scripts/export-post-images.sh
 
 ## 次にやること
 
-- [ ] テンプレートの事前パース（GET / 高速化）
-- [ ] `GET /` / `GET /posts` のクエリ改善（コメント最新3件の SQL 化）
 - [ ] `GET /image/:id.:ext` に `Cache-Control` / `ETag`
 - [ ] `/posts/:id` の `SELECT *` 見直し
+- [ ] PR 作成（image-file-storage 等）
 - [ ] 振り返り最終記入

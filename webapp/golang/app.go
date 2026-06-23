@@ -29,6 +29,14 @@ import (
 var (
 	db    *sqlx.DB
 	store *gsm.MemcacheStore
+
+	tmplLogin    *template.Template
+	tmplRegister *template.Template
+	tmplIndex    *template.Template
+	tmplUser     *template.Template
+	tmplPosts    *template.Template
+	tmplPostID   *template.Template
+	tmplBanned   *template.Template
 )
 
 const (
@@ -364,11 +372,70 @@ func fetchCommentCountsByPostIDs(ctx context.Context, postIDs []int) (map[int]in
 	return m, nil
 }
 
+func getTemplPath(filename string) string {
+	return path.Join("templates", filename)
+}
+
+func mustParseTemplates() {
+	tmplLogin = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("login.html"),
+	))
+	tmplRegister = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("register.html"),
+	))
+	tmplBanned = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("banned.html"),
+	))
+
+	fmap := template.FuncMap{"imageURL": imageURL}
+	tmplIndex = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("index.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	tmplUser = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("user.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	tmplPosts = template.Must(template.New("posts.html").Funcs(fmap).ParseFiles(
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	tmplPostID = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("post_id.html"),
+		getTemplPath("post.html"),
+	))
+}
+
 func fetchCommentsByPostIDs(ctx context.Context, postIDs []int, allComments bool) (map[int][]Comment, error) {
 	if len(postIDs) == 0 {
 		return map[int][]Comment{}, nil
 	}
-	query, args, err := sqlx.In("SELECT * FROM `comments` WHERE `post_id` IN (?) ORDER BY `post_id`, `created_at` DESC", postIDs)
+
+	var query string
+	if allComments {
+		query = "SELECT `id`, `post_id`, `user_id`, `comment`, `created_at` FROM `comments` WHERE `post_id` IN (?) ORDER BY `post_id`, `created_at` DESC"
+	} else {
+		query = `
+			SELECT id, post_id, user_id, comment, created_at
+			FROM (
+				SELECT id, post_id, user_id, comment, created_at,
+					ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY created_at DESC) AS rn
+				FROM comments
+				WHERE post_id IN (?)
+			) AS t
+			WHERE t.rn <= 3
+			ORDER BY post_id, created_at DESC`
+	}
+
+	query, args, err := sqlx.In(query, postIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -381,9 +448,6 @@ func fetchCommentsByPostIDs(ctx context.Context, postIDs []int, allComments bool
 
 	m := make(map[int][]Comment)
 	for _, c := range all {
-		if !allComments && len(m[c.PostID]) >= 3 {
-			continue
-		}
 		m[c.PostID] = append(m[c.PostID], c)
 	}
 	return m, nil
@@ -423,10 +487,6 @@ func secureRandomStr(b int) string {
 	return fmt.Sprintf("%x", k)
 }
 
-func getTemplPath(filename string) string {
-	return path.Join("templates", filename)
-}
-
 func getInitialize(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dbInitialize(ctx)
@@ -441,10 +501,7 @@ func getLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("login.html")),
-	).Execute(w, struct {
+	tmplLogin.Execute(w, struct {
 		Me    User
 		Flash string
 	}{me, getFlash(w, r, "notice")})
@@ -481,10 +538,7 @@ func getRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("register.html")),
-	).Execute(w, struct {
+	tmplRegister.Execute(w, struct {
 		Me    User
 		Flash string
 	}{User{}, getFlash(w, r, "notice")})
@@ -569,16 +623,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("index.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	tmplIndex.Execute(w, struct {
 		Posts     []Post
 		Me        User
 		CSRFToken string
@@ -634,16 +679,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 	me := getSessionUser(r)
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("user.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	tmplUser.Execute(w, struct {
 		Posts          []Post
 		User           User
 		PostCount      int
@@ -690,14 +726,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("posts.html").Funcs(fmap).ParseFiles(
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, posts)
+	tmplPosts.Execute(w, posts)
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
@@ -731,15 +760,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 
 	me := getSessionUser(r)
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("post_id.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	tmplPostID.Execute(w, struct {
 		Post Post
 		Me   User
 	}{p, me})
@@ -924,10 +945,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("banned.html")),
-	).Execute(w, struct {
+	tmplBanned.Execute(w, struct {
 		Users     []User
 		Me        User
 		CSRFToken string
@@ -1015,6 +1033,8 @@ func main() {
 	if err := os.MkdirAll(imageDir, 0755); err != nil {
 		log.Fatalf("Failed to create image dir: %s.", err.Error())
 	}
+
+	mustParseTemplates()
 
 	r := chi.NewRouter()
 
