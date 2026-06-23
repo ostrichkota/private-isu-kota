@@ -1,0 +1,8 @@
+# /etc/mysql/conf.d/isucon-tuning.cnf に配置
+# 反映: sudo cp scripts/mysql-tuning.cnf.example /etc/mysql/conf.d/isucon-tuning.cnf && sudo systemctl restart mysql
+
+[mysqld]
+innodb_buffer_pool_size = 768M
+innodb_flush_log_at_trx_commit = 2
+# ベンチ環境: binlog 肥大化によるディスク枯渇を防ぐ（デフォルト 30 日 → 1 日）
+binlog_expire_logs_seconds = 86400

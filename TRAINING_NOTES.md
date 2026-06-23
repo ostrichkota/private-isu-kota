@@ -11,8 +11,7 @@
 - [x] openssl → ネイティブ SHA512（login/register）
 - [x] `GET /@xxx` のクエリ改善
 - [x] `SetMaxOpenConns` 等の Go チューニング（MaxOpen/Idle=80, interpolateParams）
-- [x] MySQL InnoDB チューニング（buffer pool 768M / flush=2 / binlog 1日）
-- [x] nginx gzip 有効化（CSS/JS 含む gzip_types + gzip_proxied）
+- [x] MySQL InnoDB チューニング（buffer pool 768M / flush_log_at_trx_commit=2 / binlog 1日）
 
 ## ベンチマーク結果
 
@@ -22,13 +21,29 @@
 | インデックス追加後 | true | 15139 | 14253 | 0 | fail 解消 |
 | N+1 解消 + SHA512 ネイティブ化後 | true | 36027 | 32272 | 0 | pass 維持 |
 | `GET /@xxx` クエリ改善後 | true | 39342 | 35158 | 0 | pass 維持 |
-| DB 接続プール調整後 | true | 45524 | 40676 | 0 | MaxOpen/Idle=80 |
-| nginx gzip 有効化後 | true | 46899 | 41762 | 0 | CSS/JS も圧縮 |
+| MySQL InnoDB チューニング後 | true | 41214 | 36804 | 0 | buffer pool 1G, flush=2 |
+| buffer pool 768M に調整後 | true | 46121 | 41010 | 0 | メモリ 3.7GB 向け |
+| DB チューニング一式後 | true | 47284 | 42152 | 0 | pool+InnoDB+binlog |
+
+buffer pool 比較（同一環境・flush=2）:
+
+| buffer pool | score（代表値） |
+|-------------|----------------|
+| 1G | 46475 |
+| 768M | 46121 |
+| 512M | 45880 |
 
 ```bash
 cd benchmarker
 ./bin/benchmarker -t http://localhost -u ./userdata
 bash scripts/bench-analyze.sh
+```
+
+MySQL チューニング反映:
+
+```bash
+sudo cp scripts/mysql-tuning.cnf.example /etc/mysql/conf.d/isucon-tuning.cnf
+sudo systemctl restart mysql
 ```
 
 ## 計測環境
