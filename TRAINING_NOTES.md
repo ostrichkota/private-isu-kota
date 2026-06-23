@@ -10,6 +10,7 @@
 - [x] openssl → ネイティブ SHA512（login/register）
 - [x] `GET /@xxx` のクエリ改善
 - [ ] `SetMaxOpenConns` 等の Go チューニング
+- [x] MySQL InnoDB チューニング（buffer pool 1G / flush_log_at_trx_commit=2）
 
 ## ベンチマーク結果
 
@@ -19,10 +20,18 @@
 | インデックス追加後 | true | 15139 | 14253 | 0 | fail 解消 |
 | N+1 解消 + SHA512 ネイティブ化後 | true | 36027 | 32272 | 0 | pass 維持 |
 | `GET /@xxx` クエリ改善後 | true | 39342 | 35158 | 0 | pass 維持 |
+| MySQL InnoDB チューニング後 | true | 41214 | 36804 | 0 | buffer pool 1G, flush=2 |
 
 ```bash
 cd benchmarker
 ./bin/benchmarker -t http://localhost -u ./userdata
+```
+
+MySQL チューニング反映:
+
+```bash
+sudo cp scripts/mysql-tuning.cnf.example /etc/mysql/conf.d/isucon-tuning.cnf
+sudo systemctl restart mysql
 ```
 
 ## 計測環境
