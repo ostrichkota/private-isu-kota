@@ -137,14 +137,14 @@ sudo alp json --file /var/log/nginx/access.log
 
 ### 実装（1 時間 45 分）
 
-- [ ] `makePosts` を JOIN / バルク取得に書き換え
-  - 投稿 20 件を 1 クエリで取得
-  - コメント数を `GROUP BY post_id` で一括取得
-  - 最新コメント 3 件をサブクエリ or ウィンドウ関数で一括取得
-  - ユーザー情報を `WHERE id IN (...)` で一括取得
-- [ ] デプロイ → 再起動 → **ベンチ実行**
+- [x] `makePosts` を JOIN / バルク取得に書き換え
+  - [x] 投稿 20 件を 1 クエリで取得
+  - [x] コメント数を `GROUP BY post_id` で一括取得
+  - [x] 最新コメント 3 件をサブクエリ or ウィンドウ関数で一括取得
+  - [x] ユーザー情報を `WHERE id IN (...)` で一括取得
+- [ ] デプロイ → 再起動 → **ベンチ実行**（N+1 解消後）
 - [ ] スコアを記録（改善幅を確認）
-- [ ] `pass: true` を維持（DOM 構造を変えない）
+- [x] `pass: true` を維持（DOM 構造を変えない）
 
 ### 失敗時
 
@@ -159,7 +159,7 @@ N+1 後もまだ遅い場合、ここで追加改善。
 
 ### インデックス（30 分）
 
-- [ ] `EXPLAIN` で主要クエリを確認してから追加
+- [x] `EXPLAIN` で主要クエリを確認してから追加
 
 ```sql
 -- よく効くインデックス
@@ -168,7 +168,7 @@ CREATE INDEX idx_posts_user_created ON posts(user_id, created_at);
 CREATE INDEX idx_comments_post_created ON comments(post_id, created_at);
 ```
 
-- [ ] 追加後にベンチ → スコア記録
+- [x] 追加後にベンチ → スコア記録（0 → 15139）
 
 ### クイックウィン（30 分、余裕に応じて 1〜2 個）
 
@@ -241,26 +241,27 @@ CREATE INDEX idx_comments_post_created ON comments(post_id, created_at);
 - [x] SSH 接続
 - [x] ベンチマーカー実行
 - [x] 初回ベンチ + 基準スコア記録
+- [x] Ruby → Go 切り替え
 
 ### 0:00–0:30 準備
 
 - [ ] サーバ構成メモ
-- [ ] デプロイ・再起動手順の確立
+- [x] デプロイ・再起動手順の確立
 
 ### 0:30–1:00 計測
 
-- [ ] slow query log 有効化
-- [ ] alp 導入
-- [ ] ボトルネック Top 3 メモ
+- [x] slow query log 有効化
+- [x] alp 導入
+- [x] ボトルネック Top 3 メモ
 
 ### 1:00–3:00 N+1（最重要）
 
-- [ ] `makePosts` の N+1 解消
-- [ ] ベンチ pass 確認 + スコア記録
+- [x] `makePosts` の N+1 解消
+- [ ] ベンチ pass 確認 + スコア記録（N+1 解消後）
 
 ### 3:00–4:00 インデックス + インフラ
 
-- [ ] インデックス 3 本追加
+- [x] インデックス 3 本追加
 - [ ] nginx gzip 等クイックウィン 1〜2 個
 
 ### 4:00–5:30 反復
