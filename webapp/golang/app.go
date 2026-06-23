@@ -1070,6 +1070,7 @@ func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 
 	for _, id := range r.Form["uid[]"] {
 		db.ExecContext(ctx, query, 1, id)
+		memcacheClient.Delete(fmt.Sprintf("u:%s", id))
 	}
 
 	http.Redirect(w, r, "/admin/banned", http.StatusFound)
