@@ -1,0 +1,7 @@
+# /etc/nginx/sites-available/isucon.conf に追加
+log_format ltsv "time:$time_local\thost:$remote_addr\tmethod:$request_method\tpath:$uri\tquery:$query_string\tstatus:$status\tsize:$body_bytes_sent\treferer:$http_referer\tua:$http_user_agent\treqtime:$request_time\tapptime:$upstream_response_time";
+
+server {
+  access_log /var/log/nginx/access.log ltsv;
+  # ...
+}
