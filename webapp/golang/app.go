@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -40,10 +42,11 @@ var (
 )
 
 const (
-	postsPerPage  = 20
-	ISO8601Format = "2006-01-02T15:04:05-07:00"
-	UploadLimit   = 10 * 1024 * 1024 // 10mb
-	imageDir      = "/home/isucon/private_isu/webapp/images"
+	postsPerPage     = 20
+	ISO8601Format    = "2006-01-02T15:04:05-07:00"
+	UploadLimit      = 10 * 1024 * 1024 // 10mb
+	imageDir         = "/home/isucon/private_isu/webapp/images"
+	userCacheSeconds = 60
 )
 
 type User struct {
@@ -207,11 +210,39 @@ func getSessionUser(r *http.Request) User {
 		return User{}
 	}
 
-	u := User{}
+	var userID int
+	switch v := uid.(type) {
+	case int:
+		userID = v
+	case int64:
+		userID = int(v)
+	default:
+		return User{}
+	}
+	if userID == 0 {
+		return User{}
+	}
 
-	err := db.GetContext(ctx, &u, "SELECT * FROM `users` WHERE `id` = ?", uid)
+	cacheKey := fmt.Sprintf("u:%d", userID)
+	if item, err := memcacheClient.Get(cacheKey); err == nil {
+		var u User
+		if json.Unmarshal(item.Value, &u) == nil {
+			return u
+		}
+	}
+
+	u := User{}
+	err := db.GetContext(ctx, &u, "SELECT `id`, `account_name`, `passhash`, `authority`, `del_flg`, `created_at` FROM `users` WHERE `id` = ?", userID)
 	if err != nil {
 		return User{}
+	}
+
+	if b, err := json.Marshal(u); err == nil {
+		_ = memcacheClient.Set(&memcache.Item{
+			Key:        cacheKey,
+			Value:      b,
+			Expiration: userCacheSeconds,
+		})
 	}
 
 	return u
@@ -272,14 +303,24 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 		postIDs[i] = p.ID
 	}
 
-	commentCounts, err := fetchCommentCountsByPostIDs(ctx, postIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	commentsByPost, err := fetchCommentsByPostIDs(ctx, postIDs, allComments)
-	if err != nil {
-		return nil, err
+	commentCounts := make(map[int]int, len(postIDs))
+	commentsByPost := make(map[int][]Comment)
+	if allComments {
+		var err error
+		commentCounts, err = fetchCommentCountsByPostIDs(ctx, postIDs)
+		if err != nil {
+			return nil, err
+		}
+		commentsByPost, err = fetchCommentsByPostIDs(ctx, postIDs, true)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		commentCounts, commentsByPost, err = fetchCommentsAndCountsByPostIDs(ctx, postIDs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	commentUserIDSet := make(map[int]struct{})
@@ -325,7 +366,7 @@ func fetchUsersByIDs(ctx context.Context, ids []int) (map[int]User, error) {
 	if len(ids) == 0 {
 		return map[int]User{}, nil
 	}
-	query, args, err := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", ids)
+	query, args, err := sqlx.In("SELECT `id`, `account_name`, `authority`, `del_flg`, `created_at` FROM `users` WHERE `id` IN (?)", ids)
 	if err != nil {
 		return nil, err
 	}
@@ -341,6 +382,51 @@ func fetchUsersByIDs(ctx context.Context, ids []int) (map[int]User, error) {
 		m[u.ID] = u
 	}
 	return m, nil
+}
+
+type commentWithCount struct {
+	Comment
+	CommentCount int `db:"comment_count"`
+}
+
+func fetchCommentsAndCountsByPostIDs(ctx context.Context, postIDs []int) (map[int]int, map[int][]Comment, error) {
+	counts := make(map[int]int, len(postIDs))
+	for _, id := range postIDs {
+		counts[id] = 0
+	}
+	if len(postIDs) == 0 {
+		return counts, map[int][]Comment{}, nil
+	}
+
+	query := `
+		SELECT id, post_id, user_id, comment, created_at, comment_count
+		FROM (
+			SELECT id, post_id, user_id, comment, created_at,
+				COUNT(*) OVER (PARTITION BY post_id) AS comment_count,
+				ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY created_at DESC) AS rn
+			FROM comments
+			WHERE post_id IN (?)
+		) AS t
+		WHERE t.rn <= 3
+		ORDER BY post_id, created_at DESC`
+
+	query, args, err := sqlx.In(query, postIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	query = db.Rebind(query)
+
+	var rows []commentWithCount
+	if err := db.SelectContext(ctx, &rows, query, args...); err != nil {
+		return nil, nil, err
+	}
+
+	commentsByPost := make(map[int][]Comment)
+	for _, row := range rows {
+		counts[row.PostID] = row.CommentCount
+		commentsByPost[row.PostID] = append(commentsByPost[row.PostID], row.Comment)
+	}
+	return counts, commentsByPost, nil
 }
 
 func fetchCommentCountsByPostIDs(ctx context.Context, postIDs []int) (map[int]int, error) {
@@ -607,17 +693,30 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	me := getSessionUser(r)
 
-	results := []Post{}
-
-	err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", postsPerPage*5)
-	if err != nil {
-		log.Print(err)
+	var (
+		me      User
+		results []Post
+		postErr error
+		wg      sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		me = getSessionUser(r)
+	}()
+	go func() {
+		defer wg.Done()
+		postErr = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", postsPerPage*5)
+	}()
+	wg.Wait()
+	if postErr != nil {
+		log.Print(postErr)
 		return
 	}
 
-	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
+	csrfToken := getCSRFToken(r)
+	posts, err := makePosts(ctx, results, csrfToken, false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -628,7 +727,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		Me        User
 		CSRFToken string
 		Flash     string
-	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
+	}{posts, me, csrfToken, getFlash(w, r, "notice")})
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {
@@ -636,7 +735,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 	accountName := r.PathValue("accountName")
 	user := User{}
 
-	err := db.GetContext(ctx, &user, "SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", accountName)
+	err := db.GetContext(ctx, &user, "SELECT `id`, `account_name`, `authority`, `del_flg`, `created_at` FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", accountName)
 	if err != nil {
 		log.Print(err)
 		return
@@ -655,7 +754,8 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
+	csrfToken := getCSRFToken(r)
+	posts, err := makePosts(ctx, results, csrfToken, false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -708,14 +808,28 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC LIMIT ?", t.Format(ISO8601Format), postsPerPage*5)
-	if err != nil {
-		log.Print(err)
+	var (
+		results   []Post
+		csrfToken string
+		postErr   error
+		wg        sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		postErr = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC LIMIT ?", t.Format(ISO8601Format), postsPerPage*5)
+	}()
+	go func() {
+		defer wg.Done()
+		csrfToken = getCSRFToken(r)
+	}()
+	wg.Wait()
+	if postErr != nil {
+		log.Print(postErr)
 		return
 	}
 
-	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
+	posts, err := makePosts(ctx, results, csrfToken, false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -739,7 +853,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `id` = ?", pid)
 	if err != nil {
 		log.Print(err)
 		return
@@ -939,7 +1053,9 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 	}
 
 	users := []User{}
-	err := db.SelectContext(ctx, &users, "SELECT * FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC")
+	csrfToken := getCSRFToken(r)
+
+	err := db.SelectContext(ctx, &users, "SELECT `id`, `account_name`, `authority`, `del_flg`, `created_at` FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC")
 	if err != nil {
 		log.Print(err)
 		return
@@ -949,7 +1065,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		Users     []User
 		Me        User
 		CSRFToken string
-	}{users, me, getCSRFToken(r)})
+	}{users, me, csrfToken})
 }
 
 func postAdminBanned(w http.ResponseWriter, r *http.Request) {
@@ -980,6 +1096,7 @@ func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 
 	for _, id := range r.Form["uid[]"] {
 		db.ExecContext(ctx, query, 1, id)
+		memcacheClient.Delete(fmt.Sprintf("u:%s", id))
 	}
 
 	http.Redirect(w, r, "/admin/banned", http.StatusFound)
