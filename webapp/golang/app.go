@@ -272,14 +272,24 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 		postIDs[i] = p.ID
 	}
 
-	commentCounts, err := fetchCommentCountsByPostIDs(ctx, postIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	commentsByPost, err := fetchCommentsByPostIDs(ctx, postIDs, allComments)
-	if err != nil {
-		return nil, err
+	commentCounts := make(map[int]int, len(postIDs))
+	commentsByPost := make(map[int][]Comment)
+	if allComments {
+		var err error
+		commentCounts, err = fetchCommentCountsByPostIDs(ctx, postIDs)
+		if err != nil {
+			return nil, err
+		}
+		commentsByPost, err = fetchCommentsByPostIDs(ctx, postIDs, true)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		commentCounts, commentsByPost, err = fetchCommentsAndCountsByPostIDs(ctx, postIDs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	commentUserIDSet := make(map[int]struct{})
@@ -341,6 +351,51 @@ func fetchUsersByIDs(ctx context.Context, ids []int) (map[int]User, error) {
 		m[u.ID] = u
 	}
 	return m, nil
+}
+
+type commentWithCount struct {
+	Comment
+	CommentCount int `db:"comment_count"`
+}
+
+func fetchCommentsAndCountsByPostIDs(ctx context.Context, postIDs []int) (map[int]int, map[int][]Comment, error) {
+	counts := make(map[int]int, len(postIDs))
+	for _, id := range postIDs {
+		counts[id] = 0
+	}
+	if len(postIDs) == 0 {
+		return counts, map[int][]Comment{}, nil
+	}
+
+	query := `
+		SELECT id, post_id, user_id, comment, created_at, comment_count
+		FROM (
+			SELECT id, post_id, user_id, comment, created_at,
+				COUNT(*) OVER (PARTITION BY post_id) AS comment_count,
+				ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY created_at DESC) AS rn
+			FROM comments
+			WHERE post_id IN (?)
+		) AS t
+		WHERE t.rn <= 3
+		ORDER BY post_id, created_at DESC`
+
+	query, args, err := sqlx.In(query, postIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	query = db.Rebind(query)
+
+	var rows []commentWithCount
+	if err := db.SelectContext(ctx, &rows, query, args...); err != nil {
+		return nil, nil, err
+	}
+
+	commentsByPost := make(map[int][]Comment)
+	for _, row := range rows {
+		counts[row.PostID] = row.CommentCount
+		commentsByPost[row.PostID] = append(commentsByPost[row.PostID], row.Comment)
+	}
+	return counts, commentsByPost, nil
 }
 
 func fetchCommentCountsByPostIDs(ctx context.Context, postIDs []int) (map[int]int, error) {
