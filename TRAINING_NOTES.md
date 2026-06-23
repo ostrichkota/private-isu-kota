@@ -1,9 +1,15 @@
 # ISUCON 研修メモ（Go 切り替え + インデックス）
 
-## 実施内容
+## 進捗
 
-1. アプリ言語を Ruby → Go に切り替え（`isu-ruby` 停止、`isu-go` 起動）
-2. MySQL にインデックス 3 本を追加（`sql/add_indexes.sql`）
+- [x] アプリ言語を Ruby → Go に切り替え（`isu-ruby` 停止、`isu-go` 起動）
+- [x] MySQL にインデックス 3 本を追加（`sql/add_indexes.sql`）
+- [x] 計測環境セットアップ（slow log / alp / nginx LTSV / `scripts/bench-analyze.sh`）
+- [x] ベンチ → ログ解析でボトルネック Top 3 をメモ（alp・slow log）
+- [x] `makePosts` の N+1 をバルク取得で解消（`webapp/golang/app.go`）
+- [ ] openssl → ネイティブ SHA512（login/register）
+- [ ] `GET /@xxx` のクエリ改善
+- [ ] `SetMaxOpenConns` 等の Go チューニング
 
 ## ベンチマーク結果
 
@@ -11,6 +17,7 @@
 |-----------|------|-------|---------|------|------|
 | Go 素の状態 | true | 0 | 495 | 56 | タイムアウト多発 |
 | インデックス追加後 | true | 15139 | 14253 | 0 | fail 解消 |
+| N+1 解消後 | | | | | 未計測 |
 
 ```bash
 cd benchmarker
@@ -53,9 +60,3 @@ bash scripts/bench-analyze.sh
 | 1 | `SELECT COUNT(*) FROM comments WHERE user_id = ?` |
 | 2 | `INSERT INTO posts (...)` |
 | 3 | `DELETE FROM posts WHERE id > ?`（initialize） |
-
-## 次にやること
-
-- [ ] openssl → ネイティブ SHA512（login/register）
-- [ ] `GET /@xxx` のクエリ改善
-- [ ] `SetMaxOpenConns` 等の Go チューニング
