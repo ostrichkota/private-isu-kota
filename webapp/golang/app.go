@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -40,10 +41,11 @@ var (
 )
 
 const (
-	postsPerPage  = 20
-	ISO8601Format = "2006-01-02T15:04:05-07:00"
-	UploadLimit   = 10 * 1024 * 1024 // 10mb
-	imageDir      = "/home/isucon/private_isu/webapp/images"
+	postsPerPage     = 20
+	ISO8601Format    = "2006-01-02T15:04:05-07:00"
+	UploadLimit      = 10 * 1024 * 1024 // 10mb
+	imageDir         = "/home/isucon/private_isu/webapp/images"
+	userCacheSeconds = 60
 )
 
 type User struct {
@@ -207,11 +209,39 @@ func getSessionUser(r *http.Request) User {
 		return User{}
 	}
 
-	u := User{}
+	var userID int
+	switch v := uid.(type) {
+	case int:
+		userID = v
+	case int64:
+		userID = int(v)
+	default:
+		return User{}
+	}
+	if userID == 0 {
+		return User{}
+	}
 
-	err := db.GetContext(ctx, &u, "SELECT * FROM `users` WHERE `id` = ?", uid)
+	cacheKey := fmt.Sprintf("u:%d", userID)
+	if item, err := memcacheClient.Get(cacheKey); err == nil {
+		var u User
+		if json.Unmarshal(item.Value, &u) == nil {
+			return u
+		}
+	}
+
+	u := User{}
+	err := db.GetContext(ctx, &u, "SELECT `id`, `account_name`, `passhash`, `authority`, `del_flg`, `created_at` FROM `users` WHERE `id` = ?", userID)
 	if err != nil {
 		return User{}
+	}
+
+	if b, err := json.Marshal(u); err == nil {
+		_ = memcacheClient.Set(&memcache.Item{
+			Key:        cacheKey,
+			Value:      b,
+			Expiration: userCacheSeconds,
+		})
 	}
 
 	return u
@@ -794,7 +824,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `id` = ?", pid)
 	if err != nil {
 		log.Print(err)
 		return
