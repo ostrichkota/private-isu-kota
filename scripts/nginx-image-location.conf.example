@@ -1,0 +1,12 @@
+# isucon.conf の server { } 内、location / より前に追加
+# 反映後: sudo nginx -t && sudo systemctl reload nginx
+
+  location ~ ^/image/([0-9]+)\.(jpg|png|gif)$ {
+    alias /home/isucon/private_isu/webapp/images/$1.$2;
+    error_page 404 = @image_app;
+  }
+
+  location @image_app {
+    proxy_set_header Host $host;
+    proxy_pass http://127.0.0.1:8080;
+  }

@@ -35,6 +35,7 @@ const (
 	postsPerPage  = 20
 	ISO8601Format = "2006-01-02T15:04:05-07:00"
 	UploadLimit   = 10 * 1024 * 1024 // 10mb
+	imageDir      = "/home/isucon/private_isu/webapp/images"
 )
 
 type User struct {
@@ -91,6 +92,64 @@ func dbInitialize(ctx context.Context) {
 
 	for _, sql := range sqls {
 		db.ExecContext(ctx, sql)
+	}
+	deletePostImagesAbove(10000)
+}
+
+func extFromMime(mime string) string {
+	switch mime {
+	case "image/jpeg":
+		return "jpg"
+	case "image/png":
+		return "png"
+	case "image/gif":
+		return "gif"
+	default:
+		return ""
+	}
+}
+
+func mimeFromExt(ext string) string {
+	switch ext {
+	case "jpg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "gif":
+		return "image/gif"
+	default:
+		return ""
+	}
+}
+
+func imageFilePath(id int, ext string) string {
+	return path.Join(imageDir, strconv.Itoa(id)+"."+ext)
+}
+
+func savePostImage(id int, mime string, data []byte) error {
+	ext := extFromMime(mime)
+	if ext == "" {
+		return fmt.Errorf("unknown mime: %s", mime)
+	}
+	return os.WriteFile(imageFilePath(id, ext), data, 0644)
+}
+
+func deletePostImagesAbove(id int) {
+	entries, err := os.ReadDir(imageDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		dot := strings.LastIndex(name, ".")
+		if dot <= 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(name[:dot])
+		if err != nil || pid <= id {
+			continue
+		}
+		os.Remove(path.Join(imageDir, name))
 	}
 }
 
@@ -750,7 +809,7 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		query,
 		me.ID,
 		mime,
-		filedata,
+		[]byte{},
 		r.FormValue("body"),
 	)
 	if err != nil {
@@ -760,6 +819,11 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 
 	pid, err := result.LastInsertId()
 	if err != nil {
+		log.Print(err)
+		return
+	}
+
+	if err := savePostImage(int(pid), mime, filedata); err != nil {
 		log.Print(err)
 		return
 	}
@@ -776,23 +840,34 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ext := r.PathValue("ext")
+	mime := mimeFromExt(ext)
+	if mime == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if data, err := os.ReadFile(imageFilePath(pid, ext)); err == nil {
+		w.Header().Set("Content-Type", mime)
+		if _, err := w.Write(data); err != nil {
+			log.Print(err)
+		}
+		return
+	}
+
 	post := Post{}
-	err = db.GetContext(ctx, &post, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	err = db.GetContext(ctx, &post, "SELECT `mime`, `imgdata` FROM `posts` WHERE `id` = ?", pid)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	ext := r.PathValue("ext")
-
 	if ext == "jpg" && post.Mime == "image/jpeg" ||
 		ext == "png" && post.Mime == "image/png" ||
 		ext == "gif" && post.Mime == "image/gif" {
 		w.Header().Set("Content-Type", post.Mime)
-		_, err := w.Write(post.Imgdata)
-		if err != nil {
+		if _, err := w.Write(post.Imgdata); err != nil {
 			log.Print(err)
-			return
 		}
 		return
 	}
@@ -936,6 +1011,10 @@ func main() {
 	db.SetMaxOpenConns(80)
 	db.SetMaxIdleConns(80)
 	defer db.Close()
+
+	if err := os.MkdirAll(imageDir, 0755); err != nil {
+		log.Fatalf("Failed to create image dir: %s.", err.Error())
+	}
 
 	r := chi.NewRouter()
 

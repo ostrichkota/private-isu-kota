@@ -1,0 +1,2 @@
+webapp/images/*
+!webapp/images/.gitkeep
