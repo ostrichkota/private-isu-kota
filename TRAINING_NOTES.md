@@ -8,8 +8,9 @@
 - [x] ベンチ → ログ解析でボトルネック Top 3 をメモ（alp・slow log）
 - [x] `makePosts` の N+1 をバルク取得で解消（`webapp/golang/app.go`）
 - [x] openssl → ネイティブ SHA512（login/register）
-- [ ] `GET /@xxx` のクエリ改善（PR: `training/user-profile-query`）
+- [x] `GET /@xxx` のクエリ改善
 - [x] `SetMaxOpenConns` 等の Go チューニング
+- [x] nginx gzip 有効化（CSS/JS 含む gzip_types + gzip_proxied）
 
 ## ベンチマーク結果
 
@@ -19,6 +20,7 @@
 | インデックス追加後 | true | 15139 | 14253 | 0 | fail 解消 |
 | N+1 解消 + SHA512 ネイティブ化後 | true | 36027 | 32272 | 0 | pass 維持 |
 | DB 接続プール調整後 | true | 45524 | 40676 | 0 | MaxOpen/Idle=80 |
+| nginx gzip 有効化後 | true | 46899 | 41762 | 0 | CSS/JS も圧縮 |
 
 ```bash
 cd benchmarker
@@ -37,6 +39,10 @@ sudo mysql -e "SET GLOBAL slow_query_log = 1; SET GLOBAL long_query_time = 0.1;"
 go install github.com/tkuchiki/alp/cmd/alp@latest
 
 # nginx LTSV ログ（scripts/nginx-ltsv.conf.example を参照）
+sudo nginx -t && sudo systemctl reload nginx
+
+# nginx gzip（scripts/nginx-gzip.conf.example を参照）
+sudo cp scripts/nginx-gzip.conf.example /etc/nginx/conf.d/isucon-gzip.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
