@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -692,13 +693,25 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	me := getSessionUser(r)
 
-	results := []Post{}
-
-	err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", postsPerPage*5)
-	if err != nil {
-		log.Print(err)
+	var (
+		me      User
+		results []Post
+		postErr error
+		wg      sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		me = getSessionUser(r)
+	}()
+	go func() {
+		defer wg.Done()
+		postErr = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", postsPerPage*5)
+	}()
+	wg.Wait()
+	if postErr != nil {
+		log.Print(postErr)
 		return
 	}
 
@@ -795,14 +808,27 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC LIMIT ?", t.Format(ISO8601Format), postsPerPage*5)
-	if err != nil {
-		log.Print(err)
+	var (
+		results   []Post
+		csrfToken string
+		postErr   error
+		wg        sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		postErr = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC LIMIT ?", t.Format(ISO8601Format), postsPerPage*5)
+	}()
+	go func() {
+		defer wg.Done()
+		csrfToken = getCSRFToken(r)
+	}()
+	wg.Wait()
+	if postErr != nil {
+		log.Print(postErr)
 		return
 	}
 
-	csrfToken := getCSRFToken(r)
 	posts, err := makePosts(ctx, results, csrfToken, false)
 	if err != nil {
 		log.Print(err)
